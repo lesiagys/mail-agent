@@ -31,6 +31,7 @@ class MailItem:
     message_id: str
     body: str = ""
     attachments: list[str] = field(default_factory=list)
+    recipients: list[str] = field(default_factory=list)
 
     def __repr__(self) -> str:
         ts = self.received_time.strftime("%Y-%m-%d %H:%M") if self.received_time else "?"
@@ -196,6 +197,13 @@ def parse_mail(msg: Message, uid: str) -> MailItem:
             pass
 
     body, attachments = _extract_body(msg)
+    
+    # Парсим получателей (To + CC + BCC)
+    recipients = []
+    for header in ["To", "Cc", "Bcc"]:
+        value = msg.get(header)
+        if value:
+            recipients.append(_decode_mime(value))
 
     return MailItem(
         uid=uid,
@@ -205,6 +213,7 @@ def parse_mail(msg: Message, uid: str) -> MailItem:
         message_id=msg.get("Message-ID", "").strip(),
         body=body,
         attachments=attachments,
+        recipients=recipients,
     )
 
 

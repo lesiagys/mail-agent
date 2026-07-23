@@ -12,6 +12,7 @@ from langchain.tools import tool
 
 from .client import MailClient, MailItem
 from .config import MailConfig, get_config
+from .contacts import needs_sync, search_contacts, start_background_sync, update_contacts_from_emails
 from .sender import send_via_smtp, validate_recipients
 
 # Тела писем в списке не отдаём — только превью
@@ -92,6 +93,10 @@ def list_emails(
         subject_contains: Фильтр по теме (подстрока).
         limit: Сколько писем вернуть, максимум 50.
     """
+    # Запускаем фоновую синхронизацию контактов (если нужно)
+    config = _get_config()
+    start_background_sync(lambda: MailClient(config), config.login)
+    
     limit = max(1, min(limit, _MAX_LIMIT))
 
     # Фильтрацию отдаём серверу — так по сети не едет лишнее
@@ -267,4 +272,48 @@ def send_email(
     )
 
 
-TOOLS = [list_folders, list_emails, read_email, send_email]
+@tool
+def search_contacts_tool(query: str) -> str:
+    """Найти информацию о контактах по имени или email.
+
+    Вызывай, когда нужно узнать контекст о контакте перед ответом на письмо
+    или при анализе переписки. Ищет по началу имени или email.
+
+    Args:
+        query: Поисковый запрос (имя, email или фрагмент).
+    """
+    results = search_contacts(query)
+    
+    if not results:
+        return f"Контактов по запросу '{query}' не найдено."
+    
+    lines = [f"Найдено контактов: {len(results)}\n"]
+    
+    for i, contact in enumerate(results, 1):
+        name = contact.get("name", "")
+        email = contact.get("email", "")
+        domain = contact.get("domain", "")
+        first_seen = contact.get("first_seen", "?")
+        last_seen = contact.get("last_seen", "?")
+        incoming = contact.get("incoming_count", 0)
+        outgoing = contact.get("outgoing_count", 0)
+        subjects = contact.get("recent_subjects", [])
+        
+        lines.append(f"[{i}] {name} <{email}>")
+        lines.append(f"    Домен: {domain}")
+        lines.append(f"    Первое взаимодействие: {first_seen}")
+        lines.append(f"    Последнее взаимодействие: {last_seen}")
+        lines.append(f"    Входящих писем: {incoming}")
+        lines.append(f"    Исходящих писем: {outgoing}")
+        
+        if subjects:
+            lines.append("    Последние темы:")
+            for subject in subjects:
+                lines.append(f"    - {subject}")
+        
+        lines.append("")
+    
+    return "\n".join(lines)
+
+
+TOOLS = [list_folders, list_emails, read_email, send_email, search_contacts_tool]
