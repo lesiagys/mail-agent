@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Получить список писем.
 
-    python check_mail.py                      # Gmail, последние 20
+    python check_mail.py                      # провайдер из .env, последние 20
     python check_mail.py --since 1d --limit 5
-    python check_mail.py --provider sber --folders
+    python check_mail.py --provider yandex --folders
+    python check_mail.py --provider gmail --unread
 """
 
 import argparse
@@ -25,7 +26,7 @@ def parse_since(value: str) -> datetime.timedelta:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--provider", choices=["gmail", "sber"], default=None)
+    parser.add_argument("--provider", choices=["gmail", "yandex", "sber"], default=None)
     parser.add_argument("--folder", default="INBOX")
     parser.add_argument("--since", type=parse_since, default=None)
     parser.add_argument("--criteria", default=None, help='напр. "UNSEEN"')
