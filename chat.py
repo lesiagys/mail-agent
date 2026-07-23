@@ -8,7 +8,73 @@
 import sys
 import uuid
 
+from langgraph.types import Command
+
 from mail_agent.agent import build_agent
+
+
+def _read_multiline(prompt: str, current: str) -> str:
+    """Прочитать текст в несколько строк. Пустой ввод — оставить как было."""
+    print(f"{prompt} (пустая строка — оставить, '.' на отдельной строке — конец)")
+    lines: list[str] = []
+    while True:
+        try:
+            line = input()
+        except (EOFError, KeyboardInterrupt):
+            break
+        if line == ".":
+            break
+        if not line and not lines:
+            return current
+        lines.append(line)
+    return "\n".join(lines) if lines else current
+
+
+def _confirm(action: dict) -> dict:
+    """Показать письмо и спросить решение.
+
+    Возвращает decision в формате HumanInTheLoopMiddleware.
+    """
+    print()
+    print(action.get("description") or action.get("name", "Действие"))
+    print()
+
+    while True:
+        try:
+            choice = input("[o]тправить / [и]зменить / [н]ет: ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            choice = "н"
+
+        if choice in ("о", "o", "y", "да", "yes"):
+            return {"type": "approve"}
+
+        if choice in ("н", "n", "нет", "no", ""):
+            try:
+                why = input("Причина (можно пропустить): ").strip()
+            except (EOFError, KeyboardInterrupt):
+                why = ""
+            return {"type": "reject", "message": why or "Пользователь отклонил отправку."}
+
+        if choice in ("и", "и", "e", "edit"):
+            args = dict(action.get("args", {}))
+
+            to = input(f"Кому [{', '.join(args.get('to') or [])}]: ").strip()
+            if to:
+                args["to"] = [a.strip() for a in to.split(",") if a.strip()]
+
+            subject = input(f"Тема [{args.get('subject', '')}]: ").strip()
+            if subject:
+                args["subject"] = subject
+
+            args["body"] = _read_multiline("Текст:", args.get("body", ""))
+
+            return {
+                "type": "edit",
+                "edited_action": {"name": action.get("name", "send_email"), "args": args},
+            }
+
+        print("Не понял. Введи 'о', 'и' или 'н'.")
 
 
 def main() -> int:
@@ -22,10 +88,24 @@ def main() -> int:
     config = {"configurable": {"thread_id": str(uuid.uuid4())}}
 
     def ask(question: str) -> None:
-        result = agent.invoke(
-            {"messages": [{"role": "user", "content": question}]},
-            config=config,
-        )
+        payload = {"messages": [{"role": "user", "content": question}]}
+
+        # Агент прерывается на каждой отправке письма и ждёт решения.
+        # Цикл: пока приходит __interrupt__ — спрашиваем и продолжаем.
+        while True:
+            result = agent.invoke(payload, config=config)
+
+            interrupts = result.get("__interrupt__")
+            if not interrupts:
+                break
+
+            request = interrupts[0].value
+            decisions = [
+                _confirm(action)
+                for action in request.get("action_requests", [])
+            ]
+            payload = Command(resume={"decisions": decisions})
+
         print(f"\n{result['messages'][-1].content}\n")
 
     if len(sys.argv) > 1:

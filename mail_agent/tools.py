@@ -12,6 +12,7 @@ from langchain.tools import tool
 
 from .client import MailClient, MailItem
 from .config import MailConfig, get_config
+from .sender import send_via_smtp, validate_recipients
 
 # Тела писем в списке не отдаём — только превью
 _PREVIEW_CHARS = 1000
@@ -194,4 +195,76 @@ def read_email(uid: str, folder: str = "INBOX") -> str:
     return _format(item, 1, with_body=True)
 
 
-TOOLS = [list_folders, list_emails, read_email]
+@tool
+def send_email(
+    to: list[str],
+    subject: str,
+    body: str,
+    reply_to_uid: Optional[str] = None,
+) -> str:
+    """Отправить письмо. Каждый вызов подтверждается пользователем вручную.
+
+    Формулируй тему и текст сразу набело: пользователь увидит их как есть
+    и либо подтвердит отправку, либо отклонит.
+
+    Args:
+        to: Адреса получателей.
+        subject: Тема письма.
+        body: Текст письма, обычный текст без HTML.
+        reply_to_uid: uid письма из list_emails, если это ответ на него.
+            Тогда письмо уйдёт в ту же ветку, а к теме добавится "Re:".
+    """
+    config = _get_config()
+
+    invalid = validate_recipients(to)
+    if invalid:
+        return f"Отправка отменена, некорректные адреса: {', '.join(invalid)}"
+
+    in_reply_to = None
+
+    if reply_to_uid:
+        # Message-ID исходного письма нужен, чтобы ветка склеилась у получателя
+        try:
+            with MailClient(config) as client:
+                client.imap.select('"INBOX"', readonly=True)
+                status, data = client.imap.uid("FETCH", reply_to_uid, "(RFC822)")
+                if status == "OK" and data and isinstance(data[0], tuple):
+                    import email as email_module
+
+                    from .client import parse_mail
+
+                    original = parse_mail(
+                        email_module.message_from_bytes(data[0][1]), reply_to_uid
+                    )
+                    in_reply_to = original.message_id or None
+                    if in_reply_to and not subject.lower().startswith("re:"):
+                        subject = f"Re: {original.subject}"
+        except Exception as e:
+            return (
+                f"Не удалось прочитать письмо uid={reply_to_uid} для ответа: "
+                f"{type(e).__name__}: {e}"
+            )
+
+    try:
+        message_id = send_via_smtp(
+            config,
+            to=to,
+            subject=subject,
+            body=body,
+            in_reply_to=in_reply_to,
+        )
+    except (RuntimeError, ValueError) as e:
+        return f"Отправка не удалась: {e}"
+    except Exception as e:
+        return f"Ошибка SMTP: {type(e).__name__}: {e}"
+
+    thread = " ответом в ветку" if in_reply_to else ""
+    return (
+        f"Письмо отправлено{thread}.\n"
+        f"Кому: {', '.join(to)}\n"
+        f"Тема: {subject}\n"
+        f"Message-ID: {message_id}"
+    )
+
+
+TOOLS = [list_folders, list_emails, read_email, send_email]

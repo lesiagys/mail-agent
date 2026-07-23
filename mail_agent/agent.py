@@ -10,7 +10,12 @@ from typing import Optional
 
 from dotenv import load_dotenv
 from langchain.agents import create_agent
+from langchain.agents.middleware import HumanInTheLoopMiddleware
 from langgraph.checkpoint.sqlite import SqliteSaver
+
+# Версия из langchain, а не из deepagents: у deepagents обязателен
+# backend (файловое хранилище для выгрузки контекста), который тут не нужен
+from langchain.agents.middleware import SummarizationMiddleware
 
 from .config import MailConfig
 from .model import get_model
@@ -25,6 +30,8 @@ SYSTEM_PROMPT = """Ты — ассистент для работы с почто
 - list_emails(folder, days, unread_only, sender, subject_contains, limit)
   — список писем с превью текста (1000 символов).
 - read_email(uid, folder) — полный текст одного письма.
+- send_email(to, subject, body, reply_to_uid) — отправить письмо.
+  Каждую отправку пользователь подтверждает вручную.
 </инструменты>
 
 <как работать>
@@ -37,6 +44,21 @@ SYSTEM_PROMPT = """Ты — ассистент для работы с почто
    кириллические и с префиксами.
 </как работать>
 
+<отправка писем>
+Вызывай send_email только когда пользователь прямо просит отправить или
+ответить. Не отправляй по своей инициативе.
+
+Перед вызовом убедись, что знаешь адрес получателя: бери его из письма
+через list_emails или read_email, либо спроси у пользователя. Не угадывай
+адреса и не собирай их из имени и фамилии.
+
+Отвечая на письмо, передавай его uid в reply_to_uid: тема и ветка
+проставятся сами.
+
+Если отправка отклонена — не пытайся отправить то же письмо повторно.
+Спроси, что изменить.
+</отправка писем>
+
 <ответ>
 Опирайся только на то, что реально вернули инструменты. Не придумывай
 отправителей, даты и содержание. Если писем не нашлось — так и скажи.
@@ -46,10 +68,40 @@ SYSTEM_PROMPT = """Ты — ассистент для работы с почто
 Сегодня: {current_date}
 """
 
+SUMMARY_PROMPT = """Твоя задача - увменьшить общий объем сообщений, не теряя смысл диалога.
+Всегда сохраняй предпочтения пользователя.
+Сохраняй текущую дату.
+Делай краткую выжимку того, какие письма обработаны, какие отправлены.
+Неотправленные письма сохраняй в истории дословно, не изменяя ничего.
+"""
+
+
+def _describe_send(tool_call, state, runtime) -> str:
+    """Текст, который пользователь увидит перед подтверждением отправки.
+
+    Без него в запросе показывается сырой словарь аргументов — по нему
+    трудно решить, отправлять письмо или нет.
+    """
+    args = tool_call.get("args", {})
+    to = args.get("to") or []
+    if isinstance(to, str):
+        to = [to]
+
+    lines = [
+        "Отправить письмо?",
+        "",
+        f"Кому:  {', '.join(to) or '(не указан)'}",
+        f"Тема:  {args.get('subject') or '(без темы)'}",
+    ]
+    if args.get("reply_to_uid"):
+        lines.append(f"Ответ на письмо uid={args['reply_to_uid']}")
+    lines += ["", "Текст:", args.get("body") or "(пусто)"]
+    return "\n".join(lines)
+
 
 def build_agent(
     config: Optional[MailConfig] = None,
-    model: str = "qwen3.6",
+    model: str = "qwen3.6-dashscope",
     checkpoint_path: str = "db/agent_memory.sqlite",
 ):
     """Собрать агента.
@@ -68,5 +120,25 @@ def build_agent(
             current_date=datetime.now().strftime("%Y-%m-%d")
         ),
         checkpointer=SqliteSaver(conn),
+        middleware=[
+            # Отправка необратима — подтверждаем каждый вызов.
+            # HITL идёт первым: иначе неподтверждённый вызов может
+            # попасть под сжатие истории суммаризацией.
+            HumanInTheLoopMiddleware(
+                interrupt_on={
+                    "send_email": {
+                        "allowed_decisions": ["approve", "edit", "reject"],
+                        "description": _describe_send,
+                    }
+                }
+            ),
+            SummarizationMiddleware(
+                model=get_model(model),
+                summary_prompt=SUMMARY_PROMPT,
+                trigger=("tokens", 20000),
+                keep=("messages", 20),
+                trim_tokens_to_summarize=None
+            )
+        ]
     )
 

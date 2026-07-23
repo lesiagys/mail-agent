@@ -9,6 +9,7 @@ import datetime
 import email
 import imaplib
 import ssl
+import time
 from dataclasses import dataclass, field
 from email.header import decode_header, make_header
 from email.message import Message
@@ -233,12 +234,22 @@ class MailClient:
             ctx.check_hostname = False
             ctx.verify_mode = ssl.CERT_NONE
 
-        self._imap = imaplib.IMAP4_SSL(
-            self.config.imap_host,
-            self.config.imap_port,
-            ssl_context=ctx,
-        )
-        self._imap.login(self.config.login, self.config.password)
+        # Retry-логика: Gmail блокирует частые подключения
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                self._imap = imaplib.IMAP4_SSL(
+                    self.config.imap_host,
+                    self.config.imap_port,
+                    ssl_context=ctx,
+                )
+                self._imap.login(self.config.login, self.config.password)
+                return
+            except ConnectionResetError:
+                if attempt < max_retries - 1:
+                    time.sleep(5)
+                else:
+                    raise
 
     def close(self) -> None:
         if self._imap is None:

@@ -21,6 +21,18 @@ class MailConfig:
     # Внутренний контур ходит через self-signed сертификаты
     verify_cert: bool = True
 
+    # SMTP для отправки. Пусто — отправка недоступна.
+    smtp_host: str = ""
+    smtp_port: int = 587
+    # Адрес в поле From. Пусто — берётся login.
+    smtp_from: str = ""
+    # Логин к SMTP, если отличается от IMAP (в контуре — с доменом)
+    smtp_login: str = ""
+
+    @property
+    def sender_address(self) -> str:
+        return self.smtp_from or self.login
+
     def __post_init__(self):
         if not self.login or not self.password:
             raise ValueError(
@@ -50,17 +62,24 @@ def gmail_config() -> MailConfig:
         imap_host="imap.gmail.com",
         login=os.getenv("GMAIL_LOGIN", ""),
         password=password,
+        smtp_host="smtp.gmail.com",
+        smtp_port=465,
     )
 
 
 def sber_config() -> MailConfig:
     """Внутренний контур. Хост и схема логина — как в b2c_daily_researcher_qwen."""
     login = os.getenv("D_LOGIN", "")
+    domain = os.getenv("SBER_MAIL_DOMAIN", "omega.sbrf.ru")
     return MailConfig(
         imap_host=os.getenv("SBER_IMAP_HOST", "imap.sberbank.ru"),
-        # В контуре логин к SMTP шёл как {login}@omega.sbrf.ru
         login=login,
         password=os.getenv("MAIL_PASS", ""),
+        smtp_host=os.getenv("SBER_SMTP_HOST", "smtp.sberbank.ru"),
+        smtp_port=int(os.getenv("SBER_SMTP_PORT", "587")),
+        # В контуре SMTP-логин идёт с доменом, IMAP — без
+        smtp_login=f"{login}@{domain}" if login else "",
+        smtp_from=os.getenv("SBER_SMTP_FROM", ""),
     )
 
 
