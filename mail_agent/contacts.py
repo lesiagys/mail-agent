@@ -214,11 +214,15 @@ def start_background_sync(client_factory, our_email: str) -> None:
         our_email: Наш email
     """
     global _sync_in_progress
+
+    print(f"[DEBUG] Sync in progress: {_sync_in_progress}")
     
     if _sync_in_progress:
         return
     
     needs_inbox, needs_sent, sync_from_inbox, sync_from_sent = needs_sync()
+
+    print(f"[DEBUG] Need sync INBOX: {needs_inbox}; need sync SENT: {needs_sent}")
     
     if not (needs_inbox or needs_sent):
         return
@@ -234,13 +238,19 @@ def start_background_sync(client_factory, our_email: str) -> None:
         try:
             # Синхронизация INBOX
             if needs_inbox and sync_from_inbox:
+                print("[DEBUG] Sync INBOX")
                 since_delta = datetime.now() - sync_from_inbox
                 with client_factory() as client:
                     for item in client.fetch(folder="INBOX", since=since_delta):
                         update_contacts_from_emails([item], is_incoming=True, our_email=our_email)
+                # Обновляем timestamp даже если писем не было
+                data = load_contacts()
+                data["last_sync_inbox"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                save_contacts(data)
             
             # Синхронизация Sent (пробуем разные варианты имени папки)
             if needs_sent and sync_from_sent:
+                print("[DEBUG] Sync INBOX, search folder")
                 since_delta = datetime.now() - sync_from_sent
                 sent_folders = ["Sent", "Sent Items", "[Gmail]/Sent Mail", "Отправленные"]
                 with client_factory() as client:
@@ -252,8 +262,13 @@ def start_background_sync(client_factory, our_email: str) -> None:
                             break
                     
                     if sent_folder:
+                        print("[DEBUG] Sync INBOX, folder found")
                         for item in client.fetch(folder=sent_folder, since=since_delta):
                             update_contacts_from_emails([item], is_incoming=False, our_email=our_email)
+                # Обновляем timestamp даже если писем не было
+                data = load_contacts()
+                data["last_sync_sent"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                save_contacts(data)
         
         finally:
             _sync_in_progress = False
@@ -263,16 +278,16 @@ def start_background_sync(client_factory, our_email: str) -> None:
 
 
 def search_contacts(query: str) -> list[dict]:
-    """Поиск контактов по имени или email.
+    """Поиск контактов по имени, email или алиасам.
     
-    Ищет совпадения, где запрос является началом имени или email.
+    Ищет совпадения, где запрос является подстрокой имени, email или алиаса.
     Например, запрос "ivan" найдёт:
-    - ivan@example.com (точное совпадение)
-    - ivanov@example.com (содержит "ivan" + дополнительные символы)
-    - Иван Петров (если имя начинается с "ivan")
+    - ivan@example.com (содержит "ivan")
+    - petrov@example.com (если есть алиас "ivan")
+    - Иван Петров (содержит "ivan" в транслитерации)
     
     Args:
-        query: Поисковый запрос (имя, email или фрагмент)
+        query: Поисковый запрос (имя, email, алиас или фрагмент)
     
     Returns:
         Список найденных контактов
@@ -284,9 +299,40 @@ def search_contacts(query: str) -> list[dict]:
     for email, contact in contacts.get("contacts", {}).items():
         name = contact.get("name", "").lower()
         email_addr = contact.get("email", "").lower()
+        aliases = [a.lower() for a in contact.get("aliases", [])]
         
-        # Проверяем, начинается ли имя или email с запроса
-        if name.startswith(query_lower) or email_addr.startswith(query_lower):
+        # Проверяем, содержится ли запрос в имени, email или алиасах
+        if (query_lower in name or 
+            query_lower in email_addr or 
+            any(query_lower in alias for alias in aliases)):
             results.append(contact)
     
     return results
+
+
+def add_alias(email: str, alias: str) -> bool:
+    """Добавить алиас к контакту.
+    
+    Args:
+        email: Email контакта
+        alias: Алиас (прозвище), которое пользователь использует
+    
+    Returns:
+        True если алиас добавлен, False если контакт не найден
+    """
+    data = load_contacts()
+    contacts = data.get("contacts", {})
+    
+    if email not in contacts:
+        return False
+    
+    contact = contacts[email]
+    aliases = contact.get("aliases", [])
+    
+    # Добавляем алиас, если его еще нет
+    if alias not in aliases:
+        aliases.append(alias)
+        contact["aliases"] = aliases
+        save_contacts(data)
+    
+    return True

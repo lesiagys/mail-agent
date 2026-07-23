@@ -56,23 +56,18 @@ def _confirm(action: dict) -> dict:
                 why = ""
             return {"type": "reject", "message": why or "Пользователь отклонил отправку."}
 
-        if choice in ("и", "и", "e", "edit"):
-            args = dict(action.get("args", {}))
+        if choice in ("и", "e", "edit"):
+            try:
+                feedback = input("Что изменить: ").strip()
+            except (EOFError, KeyboardInterrupt):
+                print()
+                feedback = ""
 
-            to = input(f"Кому [{', '.join(args.get('to') or [])}]: ").strip()
-            if to:
-                args["to"] = [a.strip() for a in to.split(",") if a.strip()]
+            if not feedback:
+                print("Правки не внесены.")
+                continue
 
-            subject = input(f"Тема [{args.get('subject', '')}]: ").strip()
-            if subject:
-                args["subject"] = subject
-
-            args["body"] = _read_multiline("Текст:", args.get("body", ""))
-
-            return {
-                "type": "edit",
-                "edited_action": {"name": action.get("name", "send_email"), "args": args},
-            }
+            return {"type": "reject", "message": feedback}
 
         print("Не понял. Введи 'о', 'и' или 'н'.")
 

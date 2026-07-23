@@ -12,11 +12,11 @@ from langchain.tools import tool
 
 from .client import MailClient, MailItem
 from .config import MailConfig, get_config
-from .contacts import needs_sync, search_contacts, start_background_sync, update_contacts_from_emails
+from .contacts import add_alias, needs_sync, search_contacts, start_background_sync, update_contacts_from_emails
 from .sender import send_via_smtp, validate_recipients
 
 # Тела писем в списке не отдаём — только превью
-_PREVIEW_CHARS = 1000
+_PREVIEW_CHARS = 500
 # Верхняя граница на выдачу, даже если модель попросит больше
 _MAX_LIMIT = 50
 
@@ -274,13 +274,13 @@ def send_email(
 
 @tool
 def search_contacts_tool(query: str) -> str:
-    """Найти информацию о контактах по имени или email.
+    """Найти информацию о контактах по имени, email или алиасу.
 
     Вызывай, когда нужно узнать контекст о контакте перед ответом на письмо
-    или при анализе переписки. Ищет по началу имени или email.
+    или при анализе переписки. Ищет по подстроке в имени, email или алиасах.
 
     Args:
-        query: Поисковый запрос (имя, email или фрагмент).
+        query: Поисковый запрос (имя, email, алиас или фрагмент).
     """
     results = search_contacts(query)
     
@@ -298,8 +298,11 @@ def search_contacts_tool(query: str) -> str:
         incoming = contact.get("incoming_count", 0)
         outgoing = contact.get("outgoing_count", 0)
         subjects = contact.get("recent_subjects", [])
+        aliases = contact.get("aliases", [])
         
         lines.append(f"[{i}] {name} <{email}>")
+        if aliases:
+            lines.append(f"    Алиасы: {', '.join(aliases)}")
         lines.append(f"    Домен: {domain}")
         lines.append(f"    Первое взаимодействие: {first_seen}")
         lines.append(f"    Последнее взаимодействие: {last_seen}")
@@ -316,4 +319,21 @@ def search_contacts_tool(query: str) -> str:
     return "\n".join(lines)
 
 
-TOOLS = [list_folders, list_emails, read_email, send_email, search_contacts_tool]
+@tool
+def add_contact_alias(email: str, alias: str) -> str:
+    """Добавить алиас (прозвище) к контакту.
+
+    Вызывай, когда пользователь называет контакт по-другому, не по официальному
+    имени или email. Это поможет быстрее находить контакт в будущем.
+
+    Args:
+        email: Email контакта
+        alias: Прозвище, которое использует пользователь
+    """
+    if add_alias(email, alias):
+        return f"Алиас '{alias}' добавлен к контакту {email}"
+    else:
+        return f"Контакт {email} не найден. Сначала нужно найти контакт через search_contacts_tool."
+
+
+TOOLS = [list_folders, list_emails, read_email, send_email, search_contacts_tool, add_contact_alias]

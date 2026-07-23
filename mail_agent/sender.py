@@ -4,6 +4,7 @@
 в HumanInTheLoopMiddleware — см. agent.py.
 """
 
+import imaplib
 import re
 import smtplib
 import ssl
@@ -83,4 +84,48 @@ def send_via_smtp(
             else:
                 raise
 
+    # Сохраняем письмо в папку "Отправленные" через IMAP
+    _save_to_sent(config, msg)
+
     return msg.get("Message-ID", "")
+
+
+def _save_to_sent(config: MailConfig, msg: EmailMessage) -> None:
+    """Сохранить отправленное письмо в папку Sent через IMAP APPEND."""
+    try:
+        ctx = ssl.create_default_context()
+        if not config.verify_cert:
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+        
+        with imaplib.IMAP4_SSL(config.imap_host, context=ctx) as imap:
+            imap.login(config.login, config.password)
+            
+            # Ищем папку Sent
+            sent_folders = ["Sent", "Sent Items", "[Gmail]/Sent Mail", "Отправленные"]
+            status, folders = imap.list()
+            
+            if status != "OK":
+                return
+            
+            # Парсим список папок и ищем подходящую
+            sent_folder = None
+            for folder_line in folders:
+                if isinstance(folder_line, bytes):
+                    folder_str = folder_line.decode("utf-8", errors="ignore")
+                    for folder_name in sent_folders:
+                        if folder_name in folder_str:
+                            sent_folder = folder_name
+                            break
+                    if sent_folder:
+                        break
+            
+            if not sent_folder:
+                return
+            
+            # Сохраняем письмо в папку
+            msg_bytes = msg.as_bytes()
+            imap.append(f'"{sent_folder}"', "\\Seen", imaplib.Time2Internaldate(time.time()), msg_bytes)
+    except Exception:
+        # Если не удалось сохранить — не критично, письмо уже отправлено
+        pass
