@@ -78,7 +78,8 @@ def send_via_smtp(
             break
         except (smtplib.SMTPServerDisconnected, ConnectionResetError):
             if attempt < max_retries - 1:
-                time.sleep(5)
+                delay = 5 * (attempt + 1)  # 5, 10, 15, 20 секунд
+                time.sleep(delay)
             else:
                 raise
 

@@ -83,10 +83,27 @@ def sber_config() -> MailConfig:
     )
 
 
+def yandex_config() -> MailConfig:
+    """Яндекс Почта для локального теста.
+    
+    Пароль — пароль приложения, не пароль от аккаунта:
+    https://id.yandex.ru/security → "Пароли приложений" → "Почта"
+    """
+    return MailConfig(
+        imap_host="imap.yandex.ru",
+        login=os.getenv("YANDEX_LOGIN", ""),
+        password=os.getenv("YANDEX_APP_PASSWORD", ""),
+        smtp_host="smtp.yandex.ru",
+        smtp_port=465,
+    )
+
+
 def get_config(provider: str | None = None) -> MailConfig:
     provider = provider or os.getenv("MAIL_PROVIDER", "gmail")
     if provider == "gmail":
         return gmail_config()
     if provider == "sber":
         return sber_config()
+    if provider == "yandex":
+        return yandex_config()
     raise ValueError(f"Неизвестный провайдер: {provider}")

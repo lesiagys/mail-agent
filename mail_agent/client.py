@@ -234,8 +234,8 @@ class MailClient:
             ctx.check_hostname = False
             ctx.verify_mode = ssl.CERT_NONE
 
-        # Retry-логика: Gmail блокирует частые подключения
-        max_retries = 3
+        # Retry-логика: корпоративная сеть периодически блокирует SSL-соединения
+        max_retries = 5
         for attempt in range(max_retries):
             try:
                 self._imap = imaplib.IMAP4_SSL(
@@ -247,7 +247,8 @@ class MailClient:
                 return
             except ConnectionResetError:
                 if attempt < max_retries - 1:
-                    time.sleep(5)
+                    delay = 5 * (attempt + 1)  # 5, 10, 15, 20 секунд
+                    time.sleep(delay)
                 else:
                     raise
 
