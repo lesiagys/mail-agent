@@ -7,3 +7,6 @@ __pycache__/
 # Чекпоинты LangGraph: хранят историю диалогов вместе с текстами писем
 db/
 *.sqlite
+
+
+contacts.json
