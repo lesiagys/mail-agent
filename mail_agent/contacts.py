@@ -334,5 +334,34 @@ def add_alias(email: str, alias: str) -> bool:
         aliases.append(alias)
         contact["aliases"] = aliases
         save_contacts(data)
-    
+
+    return True
+
+
+def remove_alias(email: str, alias: str) -> bool:
+    """Удалить алиас у контакта.
+
+    Args:
+        email: Email контакта
+        alias: Алиас (прозвище), который нужно удалить
+
+    Returns:
+        True если алиас удалён, False если контакт или алиас не найден
+    """
+    data = load_contacts()
+    contacts = data.get("contacts", {})
+
+    if email not in contacts:
+        return False
+
+    contact = contacts[email]
+    aliases = contact.get("aliases", [])
+
+    if alias not in aliases:
+        return False
+
+    aliases.remove(alias)
+    contact["aliases"] = aliases
+    save_contacts(data)
+
     return True

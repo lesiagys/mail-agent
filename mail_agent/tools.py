@@ -12,7 +12,7 @@ from langchain.tools import tool
 
 from .client import MailClient, MailItem
 from .config import MailConfig, get_config
-from .contacts import add_alias, needs_sync, search_contacts, start_background_sync, update_contacts_from_emails
+from .contacts import add_alias, needs_sync, remove_alias, search_contacts, start_background_sync, update_contacts_from_emails
 from .sender import send_via_smtp, validate_recipients
 
 # Тела писем в списке не отдаём — только превью
@@ -336,4 +336,29 @@ def add_contact_alias(email: str, alias: str) -> str:
         return f"Контакт {email} не найден. Сначала нужно найти контакт через search_contacts_tool."
 
 
-TOOLS = [list_folders, list_emails, read_email, send_email, search_contacts_tool, add_contact_alias]
+@tool
+def remove_contact_alias(email: str, alias: str) -> str:
+    """Удалить алиас (прозвище) у контакта.
+
+    Вызывай, когда пользователь просит забыть или убрать прозвище контакта,
+    либо когда алиас больше не актуален (например, назначен неверно).
+
+    Args:
+        email: Email контакта
+        alias: Алиас, который нужно удалить
+    """
+    if remove_alias(email, alias):
+        return f"Алиас '{alias}' удалён у контакта {email}"
+    else:
+        return f"Не удалось удалить: у контакта {email} нет алиаса '{alias}' (или контакт не найден)."
+
+
+TOOLS = [
+    list_folders,
+    list_emails,
+    read_email,
+    send_email,
+    search_contacts_tool,
+    add_contact_alias,
+    remove_contact_alias,
+]
