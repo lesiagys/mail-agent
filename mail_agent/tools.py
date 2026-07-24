@@ -15,10 +15,13 @@ from .config import MailConfig, get_config
 from .contacts import add_alias, needs_sync, remove_alias, search_contacts, start_background_sync, update_contacts_from_emails
 from .sender import send_via_smtp, validate_recipients
 
-# Тела писем в списке не отдаём — только превью
-_PREVIEW_CHARS = 500
+# Тела писем в списке не отдаём — только короткое превью
+_PREVIEW_CHARS = 150
 # Верхняя граница на выдачу, даже если модель попросит больше
 _MAX_LIMIT = 50
+# Потолок на то, сколько писем реально забрать по IMAP за один вызов
+# (limit + offset + запас под локальный дофильтр не должны улетать в небо)
+_MAX_FETCH = 400
 
 _config: Optional[MailConfig] = None
 
@@ -78,12 +81,17 @@ def list_emails(
     sender: Optional[str] = None,
     subject_contains: Optional[str] = None,
     limit: int = 10,
+    offset: int = 0,
 ) -> str:
-    """Получить список писем с превью текста (первые 1000 символов).
+    """Получить список писем с коротким превью текста, постранично.
 
     Вызывай, когда нужно узнать, какие письма пришли, или найти письма
     по отправителю, теме или периоду. Для полного текста конкретного
     письма используй read_email с полученным uid.
+
+    Если писем по условию больше, чем limit, в ответе будет пометка
+    "есть ещё" с готовым значением offset для следующей страницы —
+    вызови list_emails повторно с этим offset, чтобы продолжить список.
 
     Args:
         folder: Папка. По умолчанию INBOX. Имена смотри через list_folders.
@@ -91,13 +99,16 @@ def list_emails(
         unread_only: Только непрочитанные.
         sender: Фильтр по адресу отправителя (подстрока).
         subject_contains: Фильтр по теме (подстрока).
-        limit: Сколько писем вернуть, максимум 50.
+        limit: Сколько писем вернуть за раз, максимум 50.
+        offset: Сколько писем (среди уже отфильтрованных, от новых к старым)
+            пропустить. 0 — первая страница, limit — вторая, и т.д.
     """
     # Запускаем фоновую синхронизацию контактов (если нужно)
     config = _get_config()
     start_background_sync(lambda: MailClient(config), config.login)
-    
+
     limit = max(1, min(limit, _MAX_LIMIT))
+    offset = max(0, offset)
 
     # Фильтрацию отдаём серверу — так по сети не едет лишнее
     criteria_parts = []
@@ -136,12 +147,15 @@ def list_emails(
     criteria = " ".join(criteria_parts) if criteria_parts else None
     since = datetime.timedelta(days=days) if days is not None else None
 
-    # Локальный дофильтр требует запаса: сервер вернёт больше, чем нужно
-    fetch_limit = limit * 4 if (local_sender or local_subject) else limit
+    # Забираем на 1 письмо больше, чем страница (offset+limit), чтобы понять,
+    # есть ли следующая страница. Локальный дофильтр по подстроке требует
+    # дополнительного запаса: сервер вернёт больше, чем реально подойдёт.
+    want = offset + limit + 1
+    fetch_limit = min(want * 4 if (local_sender or local_subject) else want, _MAX_FETCH)
 
     try:
         with MailClient(_get_config()) as client:
-            items = []
+            matched = []
             for item in client.fetch(
                 folder=folder,
                 criteria=criteria,
@@ -153,18 +167,32 @@ def list_emails(
                     continue
                 if local_subject and local_subject.lower() not in item.subject.lower():
                     continue
-                items.append(item)
-                if len(items) >= limit:
+                matched.append(item)
+                if len(matched) >= want:
                     break
     except RuntimeError as e:
         return f"Ошибка: {e}. Проверь имя папки через list_folders."
 
-    if not items:
+    page = matched[offset : offset + limit]
+    has_more = len(matched) > offset + limit
+
+    if not page:
+        if offset > 0:
+            return f"На странице с offset={offset} писем нет (страницы закончились)."
         return f"В папке {folder} писем по заданным условиям не найдено."
 
-    header = f"Найдено писем: {len(items)} (папка {folder})"
-    return header + "\n\n" + "\n\n".join(
-        _format(item, i) for i, item in enumerate(items, 1)
+    header = f"Письма {offset + 1}-{offset + len(page)} (папка {folder})"
+    footer = (
+        f"\n\nЕсть ещё письма — вызови list_emails с offset={offset + limit}, "
+        "чтобы посмотреть следующие."
+        if has_more
+        else ""
+    )
+    return (
+        header
+        + "\n\n"
+        + "\n\n".join(_format(item, offset + i) for i, item in enumerate(page, 1))
+        + footer
     )
 
 

@@ -28,8 +28,10 @@ SYSTEM_PROMPT = """Ты — ассистент для работы с почто
 
 <инструменты>
 - list_folders() — список папок ящика.
-- list_emails(folder, days, unread_only, sender, subject_contains, limit)
-  — список писем с превью текста (1000 символов).
+- list_emails(folder, days, unread_only, sender, subject_contains, limit, offset)
+  — список писем с коротким превью текста. Постраничный: если писем
+  больше limit, в ответе будет пометка "есть ещё" с offset для
+  следующей страницы — вызови ещё раз с этим offset, чтобы продолжить.
 - read_email(uid, folder) — полный текст одного письма.
 - send_email(to, subject, body, reply_to_uid) — отправить письмо.
   Каждую отправку пользователь подтверждает вручную.
