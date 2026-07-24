@@ -97,68 +97,75 @@ async def chat(request: ChatRequest):
                 decision_payload if isinstance(decision_payload, list) else [decision_payload]
             )
             print(f"[DEBUG] Резюмирую interrupt решениями: {decisions}")
-            result = agent.invoke(
-                Command(resume={"decisions": decisions}), config=session_config
-            )
+            stream_input = Command(resume={"decisions": decisions})
         else:
-            # Передаём валидную историю сообщений агенту
-            payload = {"messages": valid_messages}
             print(f"[DEBUG] Вызываю агент с {len(valid_messages)} сообщениями")
-            result = agent.invoke(payload, config=session_config)
+            stream_input = {"messages": valid_messages}
 
-        print(f"[DEBUG] Агент вернул результат: {type(result)}")
-        print(f"[DEBUG] Ключи результата: {result.keys() if isinstance(result, dict) else 'не dict'}")
-
-        # Проверяем, есть ли прерывание (запрос на подтверждение отправки)
-        interrupts = result.get("__interrupt__")
-        approval_data = None
-        if interrupts:
-            # __interrupt__ — список объектов langgraph.types.Interrupt,
-            # не словарей: полезная нагрузка лежит в .value.
-            interrupt_value = interrupts[0].value
-            action_requests = interrupt_value.get("action_requests", [])
-            review_configs = interrupt_value.get("review_configs", [])
-            first_request = action_requests[0] if action_requests else {}
-
-            response_text = first_request.get(
-                "description", "Требуется подтверждение действия."
-            )
-            approval_data = {
-                "action_requests": action_requests,
-                "review_configs": review_configs,
-            }
-        else:
-            # Обычный ответ агента
-            messages = result.get("messages", [])
-            print(f"[DEBUG] Получено {len(messages)} сообщений от агента")
-            if messages:
-                last_message = messages[-1]
-                print(f"[DEBUG] Последнее сообщение: {type(last_message)}")
-                if isinstance(last_message, dict):
-                    response_text = last_message.get("content", "")
-                elif hasattr(last_message, "content"):
-                    response_text = last_message.content
-                else:
-                    response_text = str(last_message)
-                print(f"[DEBUG] Content: {response_text[:100]}")
-            else:
-                response_text = "Нет ответа"
-
-        print(f"[DEBUG] Финальный ответ: {response_text[:100]}")
-
-        # Возвращаем в формате AI SDK UI Message Stream (SSE)
-        async def generate():
+        # Возвращаем в формате AI SDK UI Message Stream (SSE). Генератор —
+        # обычная (не async) функция: agent.stream() блокирующий, а Starlette
+        # сам уводит синхронные генераторы в threadpool, не блокируя event loop.
+        def generate():
             def sse(obj):
                 return f"data: {json.dumps(obj, ensure_ascii=False)}\n\n"
 
             text_id = str(uuid.uuid4())
+            text_started = False
             yield sse({"type": "start"})
             yield sse({"type": "start-step"})
-            yield sse({"type": "text-start", "id": text_id})
-            yield sse({"type": "text-delta", "id": text_id, "delta": response_text})
-            yield sse({"type": "text-end", "id": text_id})
-            if approval_data is not None:
-                yield sse({"type": "data-approval", "data": approval_data})
+
+            try:
+                # stream_mode="messages" отдаёт токены по мере генерации.
+                # Стримим только узел "model" — основной ответ агента;
+                # узел "tools" отдаёт результаты инструментов одним куском,
+                # узел суммаризации сообщений — служебный, наружу не идёт.
+                for chunk, metadata in agent.stream(
+                    stream_input, config=session_config, stream_mode="messages"
+                ):
+                    if metadata.get("langgraph_node") != "model":
+                        continue
+                    delta = getattr(chunk, "content", None)
+                    if not delta or not isinstance(delta, str):
+                        continue
+                    if not text_started:
+                        yield sse({"type": "text-start", "id": text_id})
+                        text_started = True
+                    yield sse({"type": "text-delta", "id": text_id, "delta": delta})
+
+                # После стрима проверяем состояние графа: если он встал на
+                # interrupt (запрос на подтверждение отправки), добавляем
+                # карточку с данными для кнопок.
+                approval_data = None
+                state = agent.get_state(session_config)
+                for task in state.tasks:
+                    if task.interrupts:
+                        interrupt_value = task.interrupts[0].value
+                        approval_data = {
+                            "action_requests": interrupt_value.get("action_requests", []),
+                            "review_configs": interrupt_value.get("review_configs", []),
+                        }
+                        break
+
+                if approval_data is not None:
+                    # Снаружи карточки — только статичный вопрос, все детали
+                    # (кому/тема/текст) показываются внутри самой карточки.
+                    if not text_started:
+                        yield sse({"type": "text-start", "id": text_id})
+                        text_started = True
+                    yield sse(
+                        {"type": "text-delta", "id": text_id, "delta": "Отправить письмо?"}
+                    )
+
+                if not text_started:
+                    yield sse({"type": "text-start", "id": text_id})
+                    text_started = True
+                yield sse({"type": "text-end", "id": text_id})
+                if approval_data is not None:
+                    yield sse({"type": "data-approval", "data": approval_data})
+            except Exception as e:
+                print(f"[DEBUG] Ошибка стриминга: {e}", file=sys.stderr)
+                yield sse({"type": "error", "errorText": f"Ошибка агента: {e}"})
+
             yield sse({"type": "finish-step"})
             yield sse({"type": "finish"})
             yield "data: [DONE]\n\n"

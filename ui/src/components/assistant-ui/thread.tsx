@@ -490,23 +490,12 @@ const isDecisionMarkerText = (s: AssistantState) => {
   );
 };
 
-const UserDecisionLabel: FC = () => {
-  const label = useAuiState((s) => {
-    const parts = s.message.parts;
-    const text = parts[0]?.type === "text" ? parts[0].text : "";
-    try {
-      const decision = JSON.parse(text.slice(DECISION_MARKER.length));
-      const value = Array.isArray(decision) ? decision[0] : decision;
-      return value?.type === "approve" ? "✅ Подтверждено" : "❌ Отклонено";
-    } catch {
-      return "";
-    }
-  });
-  return <>{label}</>;
-};
-
 const UserMessage: FC = () => {
+  // Решения по interrupt (approve/reject) отправляются как служебные
+  // сообщения пользователя, но не должны выглядеть как реплика в чате —
+  // сам факт решения виден по состоянию карточки подтверждения.
   const isDecision = useAuiState(isDecisionMarkerText);
+  if (isDecision) return null;
 
   return (
     <MessagePrimitive.Root
@@ -518,13 +507,11 @@ const UserMessage: FC = () => {
 
       <div className="aui-user-message-content-wrapper relative col-start-2 min-w-0">
         <div className="aui-user-message-content peer bg-muted text-foreground rounded-xl px-4 py-2 wrap-break-word empty:hidden">
-          {isDecision ? <UserDecisionLabel /> : <MessagePrimitive.Parts />}
+          <MessagePrimitive.Parts />
         </div>
-        {!isDecision && (
-          <div className="aui-user-action-bar-wrapper absolute start-0 top-1/2 -translate-x-full -translate-y-1/2 pe-2 peer-empty:hidden rtl:translate-x-full">
-            <UserActionBar />
-          </div>
-        )}
+        <div className="aui-user-action-bar-wrapper absolute start-0 top-1/2 -translate-x-full -translate-y-1/2 pe-2 peer-empty:hidden rtl:translate-x-full">
+          <UserActionBar />
+        </div>
       </div>
 
       <BranchPicker

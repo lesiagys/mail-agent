@@ -24,6 +24,7 @@ from .tools import TOOLS, configure
 load_dotenv()
 
 SYSTEM_PROMPT = """Ты — ассистент для работы с почтой. Отвечай на русском.
+Отвечай только по почте и о том, что относится к письмам, на другие темы не общайся.
 
 <инструменты>
 - list_folders() — список папок ящика.
@@ -109,13 +110,12 @@ def _describe_send(tool_call, state, runtime) -> str:
         to = [to]
 
     lines = [
-        "Отправить письмо?",
-        "",
         f"Кому:  {', '.join(to) or '(не указан)'}",
         f"Тема:  {args.get('subject') or '(без темы)'}",
     ]
-    if args.get("reply_to_uid"):
-        lines.append(f"Ответ на письмо uid={args['reply_to_uid']}")
+    reply_to_uid = args.get("reply_to_uid")
+    if reply_to_uid and str(reply_to_uid) != "None":
+        lines.append(f"Ответ на письмо uid={reply_to_uid}")
     lines += ["", "Текст:", args.get("body") or "(пусто)"]
     return "\n".join(lines)
 
