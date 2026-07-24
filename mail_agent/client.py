@@ -321,6 +321,8 @@ class MailClient:
         folder: str = "INBOX",
         criteria: Optional[str] = None,
         since: Optional[datetime.timedelta] = None,
+        after: Optional[datetime.datetime] = None,
+        before: Optional[datetime.datetime] = None,
         limit: Optional[int] = 20,
         with_body: bool = True,
         literal: Optional[str] = None,
@@ -328,7 +330,10 @@ class MailClient:
         """Получить письма, новые первыми.
 
         criteria: сырой IMAP-запрос ("UNSEEN", "FROM x@y.z"). Приоритетнее since.
-        since:    окно времени, напр. timedelta(days=1).
+        since:    окно времени от текущего момента, напр. timedelta(days=1).
+        after:    точная нижняя граница даты/времени (альтернатива since,
+                   не завязана на "сейчас" — для произвольного периода).
+        before:   точная верхняя граница даты/времени, не включая её саму.
         limit:    сколько писем максимум забрать.
         literal:  не-ASCII значение для criteria (см. _search).
         """
@@ -351,7 +356,10 @@ class MailClient:
         if not uids:
             return
 
-        cutoff = datetime.datetime.now() - since if since else None
+        cutoff_after = after if after is not None else (
+            datetime.datetime.now() - since if since else None
+        )
+        cutoff_before = before
 
         yielded = 0
         # Новые письма первыми
@@ -366,8 +374,11 @@ class MailClient:
 
             item = parse_mail(email.message_from_bytes(data[0][1]), uid)
 
-            # Не break: порядок UID не гарантирует порядок дат
-            if cutoff and item.received_time and item.received_time < cutoff:
+            # Не break: порядок UID не гарантирует порядок дат.
+            # IMAP SINCE/BEFORE точны до суток — дофильтруем по времени.
+            if cutoff_after and item.received_time and item.received_time < cutoff_after:
+                continue
+            if cutoff_before and item.received_time and item.received_time >= cutoff_before:
                 continue
 
             yielded += 1

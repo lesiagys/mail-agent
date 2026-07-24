@@ -76,7 +76,8 @@ def list_folders() -> str:
 @tool
 def list_emails(
     folder: str = "INBOX",
-    days: Optional[int] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
     unread_only: bool = False,
     sender: Optional[str] = None,
     subject_contains: Optional[str] = None,
@@ -95,7 +96,11 @@ def list_emails(
 
     Args:
         folder: Папка. По умолчанию INBOX. Имена смотри через list_folders.
-        days: За сколько последних дней. None — без ограничения по дате.
+        date_from: Начало периода, включительно, формат YYYY-MM-DD.
+            None — без нижней границы. Для "последних N дней" вычисли
+            дату сам от сегодняшней.
+        date_to: Конец периода, включительно, формат YYYY-MM-DD.
+            None — без верхней границы (до самых новых писем).
         unread_only: Только непрочитанные.
         sender: Фильтр по адресу отправителя (подстрока).
         subject_contains: Фильтр по теме (подстрока).
@@ -110,15 +115,33 @@ def list_emails(
     limit = max(1, min(limit, _MAX_LIMIT))
     offset = max(0, offset)
 
+    parsed_from: Optional[datetime.datetime] = None
+    parsed_to: Optional[datetime.datetime] = None
+    if date_from:
+        try:
+            parsed_from = datetime.datetime.strptime(date_from, "%Y-%m-%d")
+        except ValueError:
+            return f"Некорректный date_from='{date_from}'. Формат: YYYY-MM-DD."
+    if date_to:
+        try:
+            parsed_to = datetime.datetime.strptime(date_to, "%Y-%m-%d")
+        except ValueError:
+            return f"Некорректный date_to='{date_to}'. Формат: YYYY-MM-DD."
+    if parsed_from and parsed_to and parsed_from > parsed_to:
+        return "date_from не может быть позже date_to."
+
+    # Верхняя граница для IMAP BEFORE и локального дофильтра — начало дня,
+    # следующего за date_to, чтобы сам date_to попадал в выдачу целиком.
+    before_dt = parsed_to + datetime.timedelta(days=1) if parsed_to else None
+
     # Фильтрацию отдаём серверу — так по сети не едет лишнее
     criteria_parts = []
     if unread_only:
         criteria_parts.append("UNSEEN")
-    if days is not None:
-        date = (datetime.datetime.now() - datetime.timedelta(days=days)).strftime(
-            "%d-%b-%Y"
-        )
-        criteria_parts.append(f'SINCE "{date}"')
+    if parsed_from:
+        criteria_parts.append(f'SINCE "{parsed_from.strftime("%d-%b-%Y")}"')
+    if before_dt:
+        criteria_parts.append(f'BEFORE "{before_dt.strftime("%d-%b-%Y")}"')
 
     # Кириллица уходит IMAP-литералом, а он в запросе может быть только один
     # и только последним. Поэтому не-ASCII фильтр применяем ровно один:
@@ -145,7 +168,6 @@ def list_emails(
         criteria_parts.append(literal_key)
 
     criteria = " ".join(criteria_parts) if criteria_parts else None
-    since = datetime.timedelta(days=days) if days is not None else None
 
     # Забираем на 1 письмо больше, чем страница (offset+limit), чтобы понять,
     # есть ли следующая страница. Локальный дофильтр по подстроке требует
@@ -159,7 +181,8 @@ def list_emails(
             for item in client.fetch(
                 folder=folder,
                 criteria=criteria,
-                since=since,
+                after=parsed_from,
+                before=before_dt,
                 limit=fetch_limit,
                 literal=literal,
             ):
